@@ -1,0 +1,227 @@
+SELECT * FROM `dsml-sql-454708.Target_Dataset.order`;
+
+SELECT column_name, data_type
+FROM dsml-sql-454708.Target_Dataset.INFORMATION_SCHEMA.COLUMNS
+WHERE table_name = 'customer';
+
+SELECT COUNT(*) AS Total_Records FROM `dsml-sql-454708.Target_Dataset.order`;
+
+SELECT order_status, COUNT(order_status) AS count
+FROM `dsml-sql-454708.Target_Dataset.order`
+GROUP BY order_status
+order by count desc;
+
+SELECT *,
+IFNULL(ROUND((LEAD(total_order,1) OVER (ORDER BY order_year) - total_order)/ (total_order) * 100,2),0) AS percentage_growth
+FROM (SELECT order_year,
+COUNT(order_year) AS total_order
+FROM (SELECT EXTRACT(year from order_purchase_timestamp) AS order_year,
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_status = "delivered") t1
+GROUP BY order_year) t2
+ORDER BY Order_year;
+
+SELECT order_year, MAX(order_purchase_timestamp) AS max_order_date,
+MIN(order_purchase_timestamp) AS min_order_date,
+DATE_DIFF(MAX(order_purchase_timestamp),MIN(order_purchase_timestamp),day) AS total_record_days
+FROM (
+  SELECT *,EXTRACT(year from order_purchase_timestamp) AS order_year,
+FROM `dsml-sql-454708.Target_Dataset.order`
+)
+GROUP BY order_year
+ORDER BY order_year;
+
+SELECT date_and_month, COUNT(*) AS order_count
+FROM (SELECT *, FORMAT_DATE("%Y-%m", order_purchase_timestamp) AS date_and_month
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_status = "delivered") t1
+GROUP BY date_and_month
+ORDER BY order_count DESC
+
+WITH split_timestamp AS (
+  SELECT c.customer_id, customer_city, customer_state,
+  FORMAT_DATETIME("%H:%M",order_purchase_timestamp) AS hour_min
+  FROM `dsml-sql-454708.Target_Dataset.order` o
+  LEFT JOIN `dsml-sql-454708.Target_Dataset.customer` c ON o.customer_id = c.customer_id
+  WHERE order_status = "delivered"
+),
+
+catagory AS (SELECT *,
+CASE
+  WHEN hour_min BETWEEN "00:00" AND "06:59" THEN "Dawn"
+  WHEN hour_min BETWEEN "07:00" AND "12:59" THEN "Mornings"
+  WHEN hour_min BETWEEN "13:00" AND "18:59" THEN "Afternoon"
+  ELSE "Night"
+END AS catagory_type
+FROM split_timestamp)
+
+SELECT catagory_type,
+COUNT(catagory_type) AS order_count
+FROM catagory
+GROUP BY catagory_type
+ORDER BY COUNT(catagory_type) DESC
+
+WITH state_month_order AS (SELECT customer_state,
+FORMAT_DATETIME("%Y-%m", order_purchase_timestamp) AS year_month
+FROM `dsml-sql-454708.Target_Dataset.order` o
+LEFT JOIN `dsml-sql-454708.Target_Dataset.customer` c ON o.customer_id = c.customer_id)
+
+SELECT *,
+COUNT(customer_state) AS total_orders
+FROM state_month_order
+GROUP BY customer_state, year_month
+ORDER BY COUNT(customer_state) DESC
+
+
+
+WITH state_month_order AS (SELECT customer_state,
+FORMAT_DATETIME("%Y-%m", order_purchase_timestamp) AS year_month
+FROM `dsml-sql-454708.Target_Dataset.order` o
+LEFT JOIN `dsml-sql-454708.Target_Dataset.customer` c ON o.customer_id = c.customer_id),
+
+total_order_state AS (
+  SELECT customer_state,
+COUNT(customer_state) AS total_state_order
+FROM state_month_order
+GROUP BY customer_state
+ORDER BY total_state_order DESC)
+
+SELECT *,
+ROUND((SUM(total_state_order) OVER (PARTITION BY total_state_order)/
+SUM(total_state_order) OVER ())*100,2) AS Total
+FROM total_order_state
+ORDER BY total_state_order DESC;
+
+
+with cte as (SELECT order_id,
+DATE_DIFF(order_delivered_customer_date, order_purchase_timestamp, day) AS time_to_deliver_days,
+DATE_DIFF(order_estimated_delivery_date, order_delivered_customer_date, day) AS diff_estimated_delivery_days
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_status = "delivered"
+ORDER BY time_to_deliver_days DESC)
+
+SELECT COUNT(*) FROM cte
+WHeRE time_to_deliver_days <= 1
+
+
+WITH delivery_time AS (
+  SELECT o.order_id, customer_state,
+  DATE_DIFF(order_delivered_customer_date, order_purchase_timestamp, day) AS time_to_deliver_days,
+  DATE_DIFF(order_estimated_delivery_date, order_purchase_timestamp, day) AS estimate_deliver_days
+  FROM `dsml-sql-454708.Target_Dataset.order` o
+  LEFT JOIN `dsml-sql-454708.Target_Dataset.customer` c ON o.customer_id = c.customer_id
+  WHERE order_status = "delivered"
+),
+
+avg_time AS (SELECT customer_state,
+ROUND(AVG(time_to_deliver_days),2) AS avg_delivery_days,
+ROUND(AVG(estimate_deliver_days),2) AS avg_estimate_days
+FROM delivery_time
+GROUP BY customer_state)
+
+SELECT *,
+ROUND((avg_estimate_days - avg_delivery_days),2) AS avg_diff
+FROM avg_time
+ORDER BY avg_diff
+
+
+WITH payment_method AS (
+  SELECT o.order_id,
+  FORMAT_DATETIME("%B_%Y",order_purchase_timestamp) AS order_month,
+  payment_type
+  FROM `dsml-sql-454708.Target_Dataset.order` o
+  LEFT JOIN `dsml-sql-454708.Target_Dataset.payment` p ON o.order_id = p.order_id
+  WHERE order_status = "delivered" AND payment_type IS NOT NULL
+),
+
+final_table AS (SELECT order_month, payment_type,
+COUNT(*) AS payment_count
+FROM payment_method
+GROUP BY order_month, payment_type
+ORDER BY payment_type DESC)
+
+SELECT payment_type,
+SUM(payment_count) total_payment_count
+FROM final_table
+GROUP BY payment_type
+ORDER BY total_payment_count DESC
+
+
+WITH payment_method AS (
+  SELECT o.order_id,
+  payment_installments,
+  payment_type
+  FROM `dsml-sql-454708.Target_Dataset.order` o
+  LEFT JOIN `dsml-sql-454708.Target_Dataset.payment` p ON o.order_id = p.order_id
+  WHERE order_status = "delivered" AND payment_installments IS NOT NULL
+)
+
+SELECT 
+payment_installments,
+COUNT(order_id) AS order_count
+FROM`dsml-sql-454708.Target_Dataset.payment`
+GROUP BY payment_installments
+ORDER BY order_count
+
+
+WITH city_state AS (SELECT c.customer_id, customer_city, customer_state,
+  FROM `dsml-sql-454708.Target_Dataset.order` o
+  LEFT JOIN `dsml-sql-454708.Target_Dataset.customer` c ON o.customer_id = c.customer_id
+  WHERE order_status = "delivered")
+
+  SELECT customer_city,
+  COUNT(customer_city) AS order_count
+  FROM city_state
+  GROUP BY customer_city
+  ORDER BY order_count DESC;
+
+SELECT "order_id" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_id IS NULL
+UNION ALL
+SELECT "customer_id" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE customer_id IS NULL
+UNION ALL
+SELECT "order_status" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_status IS NULL
+UNION ALL
+SELECT "order_purchase_timestamp" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_purchase_timestamp IS NULL
+UNION ALL
+SELECT "order_approved_at" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_approved_at IS NULL
+UNION ALL
+SELECT "order_delivered_carrier_date" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_delivered_carrier_date IS NULL
+UNION ALL
+SELECT "order_delivered_customer_date" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_delivered_customer_date IS NULL
+UNION ALL
+SELECT "order_estimated_delivery_date" AS column_name, IFNULL(COUNT(*),0) AS null_count
+FROM `dsml-sql-454708.Target_Dataset.order`
+WHERE order_estimated_delivery_date IS NULL
+
+SELECT
+MIN(order_purchase_timestamp) AS min_date,
+MAX(order_purchase_timestamp) AS max_date
+FROM `dsml-sql-454708.Target_Dataset.order`
+
+SELECT review_score,
+COUNT(review_score) AS revire_count
+FROM `dsml-sql-454708.Target_Dataset.order_review`
+GROUP BY review_score
+ORDER BY revire_count DESC
+
+
+
+
+
+
+
+
